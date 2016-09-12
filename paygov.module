@@ -11,36 +11,37 @@ function paygov_menu() {
     'access arguments' => array('administer configuration'),
   );
 
-  $items['test-paygov'] = array(
+  // The following link is for debugging purposes only.
+  /*$items['test-paygov'] = array(
     'page callback' => '_paygov_test_callback',
     'access callback' => TRUE,
-  );
+  );*/
   return $items;
 }
 
 /**
- * Example requests.
+ * Test an example request for debugging purposes.
  */
 function _paygov_test_callback() {
   // Fake options.
   $options = array(
-    'agency_id' => '',
-    'tcs_app_id' => '',
-    'agency_tracking_id' => '',
-    'amount' => '',
-    'card_number' => '',
-    'card_exp_year' => '',
-    'card_exp_month' => '',
-    'first_name' => '',
+    'agency_id' => '944',
+    'tcs_app_id' => '2601',
+    'agency_tracking_id' => '101207103852841',
+    'amount' => '15.25',
+    'card_number' => '5411112222222221',
+    'card_exp_year' => '2017',
+    'card_exp_month' => '05',
+    'first_name' => 'Sonny',
     'middle_initial' => '',
-    'last_name' => '',
-    'card_security_code' => '',
-    'billing_address1' => '',
+    'last_name' => 'Bono',
+    'card_security_code' => '998',
+    'billing_address1' => '34-12 36th Street',
     'billing_address2' => '',
-    'billing_city' => '',
-    'billing_state' => '',
-    'billing_zip' => '',
-    'email' => '',
+    'billing_city' => 'Astoria',
+    'billing_state' => 'NY',
+    'billing_zip' => '11106-1214',
+    'email' => 'test@test.com',
   );
 
   // Fake call.
@@ -53,7 +54,7 @@ function _paygov_test_callback() {
 
   dpm($processed);
 
-  return 'in here';
+  return 'Processing status: ' . $processed;
 }
 
 /**
@@ -65,6 +66,7 @@ function _paygov_test_callback() {
  */
 function paygov_invoke($options = array(), $method = NULL, $environment = NULL) {
 
+  // Verify method is set properly.
   if (empty($method)) {
     $method = variable_get('paygov_handler', NULL);
   }
@@ -74,11 +76,16 @@ function paygov_invoke($options = array(), $method = NULL, $environment = NULL) 
     return;
   }
 
+  // Sanitize options.
+  foreach ($options as $key => $option) {
+    $options[$key] = check_plain($option);
+  }
+
   // Create the message.
   $message = '';
   switch ($method) {
     case 'credit card':
-      $message = theme('paygov_credit_card_handler', $options);
+      $message = theme('paygov_credit_card_handler', array('options'=>$options));
       break;
   }
 
@@ -92,16 +99,18 @@ function paygov_invoke($options = array(), $method = NULL, $environment = NULL) 
     return;
   }
 
+  dpm($message);
+
   switch ($method) {
     case 'credit card':
-      $options = array(
+      $msg_params = array(
         'headers' => array(
           'Content-Type' => 'application/xml',
         ),
         'method' => 'POST',
         'data' => $message,
       );
-      return drupal_http_request($environment . '/tcscollections/services/TCSSingleService', $options);
+      return drupal_http_request($environment . '/tcscollections/services/TCSSingleService', $msg_params);
   }
 }
 
@@ -139,7 +148,9 @@ function _paygov_process_response($method, $response) {
  * @param $response
  */
 function _paygov_process_credit_card_response($response) {
-  if (strpos('<tcs:transaction_status>Success</tcs:transaction_status>', $response)) {
+  if (!empty($response->error)) {
+    return FALSE;
+  } else if (strpos('<tcs:transaction_status>Success</tcs:transaction_status>', $response->data)) {
     return TRUE;
   }
 }
