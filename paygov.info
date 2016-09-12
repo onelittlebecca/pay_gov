@@ -1,0 +1,4 @@
+name = Pay.gov API
+description = An API for connecting with pay.gov.
+core = 7.x
+package = Payment
