@@ -1,0 +1,445 @@
+<?php
+/**
+ * Menu callbacks.
+ */
+function pay_gov_menu() {
+  $items['admin/config/system/pay-gov'] = array(
+    'title' => 'Pay.gov settings',
+    'description' => 'Administrative settings for global pay.gov operations',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('pay_gov_admin_form'),
+    'access arguments' => array('administer configuration'),
+  );
+
+  $items['pay-gov/success'] = array(
+    'title' => 'Pay.gov Successful Transaction',
+    'description' => 'Administrative settings for global pay.gov operations',
+    'page callback' => '_pay_gov_successful_hosted_collection',
+  );
+
+  $items['pay-gov/cancel'] = array(
+    'title' => 'Pay.gov Successful Transaction',
+    'description' => 'Administrative settings for global pay.gov operations',
+    'page callback' => '_pay_gov_cancel_hosted_collection',
+  );
+
+  // The following link is for debugging purposes only.
+  /*$items['test-pay-gov'] = array(
+    'page callback' => '_pay_gov_credit_card_test_callback',
+    'access callback' => TRUE,
+  );*/
+  return $items;
+}
+
+/**
+ * Test an example request for debugging purposes.
+ */
+function _pay_gov_credit_card_test_callback() {
+  // Fake options.
+  $options = array(
+    'agency_id' => '944',
+    'tcs_app_id' => '2601',
+    'agency_tracking_id' => '101207103852841',
+    'amount' => '15.25',
+    'card_number' => '5411112222222221',
+    'card_exp_year' => '2017',
+    'card_exp_month' => '05',
+    'first_name' => 'Sonny',
+    'middle_initial' => '',
+    'last_name' => 'Bono',
+    'card_security_code' => '998',
+    'billing_address1' => '34-12 36th Street',
+    'billing_address2' => '',
+    'billing_city' => 'Astoria',
+    'billing_state' => 'NY',
+    'billing_zip' => '11106-1214',
+    'email' => 'test@test.com',
+  );
+
+  // Fake call.
+  $response = pay_gov_invoke($options, 'credit card', 'https://qa.tcs.pay.gov');
+
+  // Process.
+  $processed = _pay_gov_process_response('credit card', $response);
+
+  return 'Processing status: ' . $processed;
+}
+
+/**
+ * API callback.
+ *
+ * @param $environment
+ * @param $method
+ * @param array $options
+ */
+function pay_gov_invoke($options = array(), $method = NULL, $environment = NULL) {
+
+  // Verify method is set properly.
+  if (empty($method)) {
+    $method = variable_get('pay_gov_handler', NULL);
+  }
+
+  if (empty($method)) {
+    drupal_set_message('Please configure the your default method.', 'error');
+    return;
+  }
+
+  // Sanitize options.
+  foreach ($options as $key => $option) {
+    $options[$key] = check_plain($option);
+  }
+
+  // Create the message.
+  $message = '';
+  switch ($method) {
+    case 'credit card':
+      $message = theme('pay_gov_credit_card_handler', array('options'=>$options));
+      break;
+    case 'hosted collection initialize':
+      $message = theme('pay_gov_start_hosted_collection_initialize', array('options'=>$options));
+      break;
+    case 'hosted collection complete':
+      $message = theme('pay_gov_start_hosted_collection_complete', array('options'=>$options));
+      break;
+  }
+
+  // Send the message.
+  if (empty($environment)) {
+    $environment = variable_get('pay_gov_environment', NULL);
+  }
+
+  if (empty($environment)) {
+    drupal_set_message('Please configure the environment.', 'error');
+    return;
+  }
+
+  switch ($method) {
+    case 'credit card':
+      $msg_params = array(
+        'headers' => array(
+          'Content-Type' => 'application/xml',
+        ),
+        'method' => 'POST',
+        'data' => $message,
+      );
+      return drupal_http_request($environment . '/tcscollections/services/TCSSingleService', $msg_params);
+    case 'hosted collection initialize':
+      $msg_params = array(
+        'headers' => array(
+          'Content-Type' => 'application/xml',
+        ),
+        'method' => 'POST',
+        'data' => $message,
+      );
+      return drupal_http_request($environment . '/tcscollections/services/TCSOnlineService/2.0', $msg_params);
+    case 'hosted collection complete':
+      $msg_params = array(
+        'headers' => array(
+          'Content-Type' => 'application/xml',
+        ),
+        'method' => 'POST',
+        'data' => $message,
+      );
+      return drupal_http_request($environment . '/tcscollections/services/TCSOnlineService/2.0', $msg_params);
+  }
+}
+
+/**
+ * Custom theme callbacks.
+ *
+ * @return array
+ */
+function pay_gov_theme() {
+  return array(
+    'pay_gov_credit_card_handler' => array(
+      'template' => 'pay_gov_credit_card_handler',
+      'variables' => array('options' => FALSE),
+      'path' => drupal_get_path('module', 'pay_gov') . '/templates',
+    ),
+    'pay_gov_hosted_collection_initialize' => array(
+      'template' => 'pay_gov_hosted_collection_initialize',
+      'variables' => array('options' => FALSE),
+      'path' => drupal_get_path('module', 'pay_gov') . '/templates',
+    ),
+    'pay_gov_hosted_collection_complete' => array(
+      'template' => 'pay_gov_hosted_collection_complete',
+      'variables' => array('options' => FALSE),
+      'path' => drupal_get_path('module', 'pay_gov') . '/templates',
+    ),
+  );
+}
+
+/**
+ * Process response.
+ *
+ * @param $method
+ * @param $response
+ */
+function _pay_gov_process_response($method, $response) {
+  switch ($method) {
+    case 'credit card':
+      return _pay_gov_process_credit_card_response($response);
+    case 'hosted collection initialize':
+      return _pay_gov_process_hosted_collection_initialize_response($response);
+    case 'hosted collection complete':
+      return _pay_gov_process_hosted_collection_complete_response($response);
+  }
+}
+
+/**
+ * Process credit card response.
+ *
+ * @param $response
+ */
+function _pay_gov_process_credit_card_response($response) {
+  if (!empty($response->error)) {
+    watchdog('error', 'Pay.gov credit card error: ' . $response->error);
+    return FALSE;
+  } else if (strpos('<tcs:transaction_status>Success</tcs:transaction_status>', $response->data)) {
+    return TRUE;
+  }
+}
+
+/**
+ * Process hosted collection initialization response.
+ *
+ * @param $response
+ * @return mixed
+ */
+function _pay_gov_process_hosted_collection_initialize_response($response) {
+  $xml = simplexml_load_string($response);
+  $json = json_encode($xml);
+  $array = json_decode($json, TRUE);
+  if (!empty($array['S:Body']['S:Fault'])) {
+    watchdog('error', 'Pay.gov hosted collection error: ' . $response->error);
+    return array();
+  } else if (strpos('ns2:startOnlineCollectionResponse', $response->data)) {
+    return array(
+      'token' => $array['S:Body']['ns2:startOnlineCollectionResponse']['startOnlineCollectionResponse']['token']
+    );
+  }
+}
+
+/**
+ * Process hosted collection complete response.
+ *
+ * @param $response
+ * @return mixed
+ */
+function _pay_gov_process_hosted_collection_complete_response($response) {
+  $xml = simplexml_load_string($response);
+  $json = json_encode($xml);
+  $array = json_decode($json, TRUE);
+  if (!empty($array['S:Body']['S:Fault'])) {
+    watchdog('error', 'Pay.gov hosted collection error: ' . $response->error);
+    return array();
+  } else if (strpos('ns2:completeOnlineCollectionResponse', $response->data)) {
+    return array(
+      'transaction_id' => $array['S:Body']['ns2:completeOnlineCollectionResponse']['completeOnlineCollectionResponse']['paygov_tracking_id']
+    );
+  }
+}
+
+/**
+ * Administrative configuration form.
+ */
+function pay_gov_admin_form($form, &$form_state) {
+  // Select default environment.
+  $form['pay_gov_environment'] = array(
+    '#type' => 'select',
+    '#title' => t('Pay.Gov Default Environment'),
+    '#description' => t('Select your API endpoint'),
+    '#default_value' => variable_get('pay_gov_environment', NULL),
+    '#required' => TRUE,
+    '#options' => array(
+      'https://qa.tcs.pay.gov' => t('Testing'),
+      'https://tcs.pay.gov' => t('Production'),
+    ),
+  );
+
+  // Select default handler.
+  $form['pay_gov_handler'] = array(
+    '#type' => 'select',
+    '#title' => t('Pay.Gov Default Payment Handler'),
+    '#description' => t('Select your default payment handler'),
+    '#default_value' => variable_get('pay_gov_handler', NULL),
+    '#required' => TRUE,
+    '#options' => array(
+      'credit card' => t('Credit Card'),
+      'hosted collection initialize' => t('Hosted Collection'),
+    ),
+  );
+
+  // Select default handler.
+  $form['pay_gov_agency_id'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Pay.Gov Default Agency ID'),
+    '#default_value' => variable_get('pay_gov_agency_id', NULL),
+  );
+
+  return system_settings_form($form);
+}
+
+/**
+ * Initializes a new hosted collection transaction.
+ * @param $amount
+ *   Dollar amount.
+ * @param $application_id
+ *   Pay.gov TCS Application ID.
+ * @param null $agency_id
+ *   Pay.gov agency ID.
+ * @return int|null
+ *   Transaction ID from Drupal system.
+ */
+function pay_gov_initialize_hosted_collection($amount, $application_id, $agency_id = NULL, $environment = NULL) {
+  global $language, $user, $base_url, $base_path;
+
+  // Validation.
+  $agency_id = variable_get('pay_gov_agency_id', $agency_id);
+  if (empty($agency_id)) {
+    drupal_set_message('Agency ID is undefined. Please pass an agency ID or configure one globally.', 'error');
+    return NULL;
+  }
+
+  if (!is_numeric($amount)) {
+    drupal_set_message('Amount must be numeric.', 'error');
+    return NULL;
+  }
+
+  // Acquire token.
+  $options = array(
+    'lang' => $language->language,
+    'agency_id' => $agency_id,
+    'tcs_app_id' => $application_id,
+    'amount' => $amount,
+    'url_success' => $base_url . $base_path . 'pay-gov/success',
+    'url_cancel' => $base_url . $base_path . 'pay-gov/cancel',
+  );
+
+  $response = pay_gov_invoke($options, 'hosted collection initialize', $environment);
+  $response_data = _pay_gov_process_hosted_collection_initialize_response($response);
+
+  if (empty($response_data)) {
+    drupal_set_message('There was an error with the pay.gov initialization.', 'error');
+    return NULL;
+  }
+
+  // Create record.
+  $field_map = array(
+    'status' => 'initialized',
+    'token' => $response_data['token'],
+    'amount' => $amount,
+    'tcs_app_id' => $application_id,
+    'agency_id' => $agency_id,
+    'referrer' => current_path(),
+    'uid' => $user->uid,
+    'created' => time(),
+  );
+  $transaction_id = db_insert('pay_gov_hosted_collection_transactions')
+    ->fields(array_keys($field_map))
+    ->values(array_values($field_map))
+    ->execute();
+
+  // Return the ID to reference later.
+  return $transaction_id;
+}
+
+/**
+ * Perform the redirect.
+ * @param $transaction_id
+ * @return null
+ */
+function pay_gov_hosted_collection_redirect($transaction_id, $environment = NULL) {
+  // Validation.
+  $environment = variable_get('pay_gov_agency_id', $environment);
+  if (empty($environment)) {
+    drupal_set_message('Environment ID is undefined for the hosted collection redirect. Please pass an environment or configure one globally.', 'error');
+    return NULL;
+  }
+
+  // Process redirect.
+  $query = db_select('pay_gov_hosted_collection_transactions', 't')
+    ->fields('t')
+    ->condition('t.tracking_id', $transaction_id)
+    ->execute();
+  $result = current($query->fetchAssoc());
+
+  if ($result['status'] != 'initialized') {
+    drupal_set_message('Invalid pay.gov token.', 'error');
+    return NULL;
+  }
+
+  $url = $environment . '/tcsonline/payment.do?token=' .
+    $result['token'] . '&tcsAppID=' . $result['tcs_app_id'];
+
+  drupal_goto($url, array('external' => TRUE));
+  return NULL;
+}
+
+/**
+ * Inspect the successful payload, update the record.
+ */
+function _pay_gov_successful_hosted_collection() {
+  $params = drupal_get_query_parameters();
+
+  // Check that there is a transaction.
+  if (empty($params['token']) and empty($params['tcsAppID'])) {
+    watchdog('error', 'Successful pay.gov transaction without token and tcsAppID passed');
+
+    //TODO - Consider setting error state of record.
+    return NULL;
+  }
+  // Load record.
+  $record = db_select('pay_gov_hosted_collection_transactions', 't')
+    ->fields('t')
+    ->condition('t.token', $params['token'])
+    ->condition('t.application_id', $params['tcsAppID'])
+    ->execute();
+  $result = current($record->fetchAssoc());
+  $id = $result['tracking_id'];
+
+  // Update record to mark status.
+  db_update('pay_gov_hosted_collection_transactions')
+    ->fields(array('status' => 'token received'))
+    ->condition('tracking_id', $id)
+    ->execute();
+
+  // Validation.
+
+  // Fire complete request.
+  $response = pay_gov_invoke($params, 'hosted collection complete');
+  $response_data = _pay_gov_process_response('hosted collection complete', $response);
+
+  // Save transaction id.
+  db_update('pay_gov_hosted_collection_transactions')
+    ->fields(array('status' => 'completed', 'transaction_id' => $response_data['transaction_id']))
+    ->condition('tracking_id', $id)
+    ->execute();
+}
+
+function _pay_gov_cancel_hosted_collection() {
+  $params = drupal_get_query_parameters();
+  // Check that there is a transaction.
+  if (empty($params['token']) and empty($params['tcsAppID'])) {
+    watchdog('error', 'Successful pay.gov transaction without token and tcsAppID passed');
+
+    //TODO - Consider setting error state of record.
+    return NULL;
+  }
+
+  // Update record to mark status.
+  $record = db_select('pay_gov_hosted_collection_transactions', 't')
+    ->fields('t')
+    ->condition('t.token', $params['token'])
+    ->condition('t.application_id', $params['tcsAppID'])
+    ->execute();
+  $result = current($record->fetchAssoc());
+  $id = $result['tracking_id'];
+
+  // Validation.
+  db_update('pay_gov_hosted_collection_transactions')
+    ->fields(array('status' => 'cancelled'))
+    ->condition('tracking_id', $id)
+    ->execute();
+
+}

@@ -1,0 +1,81 @@
+<?php
+/**
+ * @file
+ * Installation functions for the Pay Gov module.
+ */
+
+/**
+ * Sets up the schema for hosted collection page transactions.
+ * @return mixed
+ */
+function pay_gov_schema() {
+  $schema['pay_gov_hosted_collection_transactions'] = array(
+    // Example (partial) specification for table "node".
+    'description' => 'Pay.gov hosted collection transactions.',
+    'fields' => array(
+      'tracking_id' => array(
+        'description' => 'The primary identifier per transaction.',
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'token' => array(
+        'description' => 'Token returned from pay.gov.',
+        'type' => 'varchar',
+        'length' => 128,
+        'not null' => TRUE,
+      ),
+      'amount' => array(
+        'description' => 'Amount of transaction.',
+        'type' => 'float',
+        'not null' => TRUE,
+      ),
+      'tcs_app_id' => array(
+        'description' => 'TCS App ID for pay.gov.',
+        'type' => 'varchar',
+        'length' => 128,
+        'not null' => TRUE,
+      ),
+      'agency_id' => array(
+        'description' => 'Agency ID for pay.gov.',
+        'type' => 'varchar',
+        'length' => 128,
+        'not null' => TRUE,
+      ),
+      'referrer' => array(
+        'description' => 'Page that invoked pay.gov.',
+        'type' => 'varchar',
+        'length' => 256,
+        'not null' => TRUE,
+      ),
+      'status' => array(
+        'description' => 'Status of the transaction.',
+        'type' => 'varchar',
+        'length' => 256,
+        'not null' => TRUE,
+      ),
+      'uid' => array(
+        'description' => 'The optional Drupal user purchasing from pay.gov.',
+        'type' => 'int',
+      ),
+      'transaction_id' => array(
+        'description' => 'The resulting transaction.',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'length' => 255,
+      ),
+      'created'   => array('type' => 'int', 'not null' => TRUE, 'default' => 0),
+      'changed'   => array('type' => 'int', 'not null' => TRUE, 'default' => 0),
+    ),
+    // For documentation purposes only; foreign keys are not created in the
+    // database.
+    'foreign keys' => array(
+      'purchaser' => array(
+        'table' => 'users',
+        'columns' => array('uid' => 'uid'),
+      ),
+    ),
+    'primary key' => array('tracking_id'),
+  );
+  return $schema;
+}
