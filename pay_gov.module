@@ -8,7 +8,7 @@ function pay_gov_menu() {
     'description' => 'Administrative settings for global pay.gov operations',
     'page callback' => 'drupal_get_form',
     'page arguments' => array('pay_gov_admin_form'),
-    'access arguments' => array('administer configuration'),
+    'access arguments' => array('access administration pages'),
   );
 
   $items['pay-gov/success'] = array(
@@ -130,8 +130,85 @@ function pay_gov_invoke($options = array(), $method = NULL, $environment = NULL)
         ),
         'method' => 'POST',
         'data' => $message,
+          'context' => array(
+              'ssl' => array(
+                  'verify_peer' => FALSE,
+                  'crypto_method' => STREAM_CRYPTO_METHOD_TLSv1_1_CLIENT |
+                      STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT, //added for TLS
+                  'ciphers' => 'DHE-RSA-AES256-SHA:DHE-DSS-AES256-SHA:AES256-SHA:KRB5-DES-CBC3-MD5:KRB5-DES-CBC3-SHA:EDH-RSA-DES-CBC3-SHA:EDH-DSS-DES-CBC3-SHA:DES-CBC3-SHA:DES-CBC3-MD5:DHE-RSA-AES128-SHA:DHE-DSS-AES128-SHA:AES128-SHA:RC2-CBC-MD5:KRB5-RC4-MD5:KRB5-RC4-SHA:RC4-SHA:RC4-MD5:RC4-MD5:KRB5-DES-CBC-MD5:KRB5-DES-CBC-SHA:EDH-RSA-DES-CBC-SHA:EDH-DSS-DES-CBC-SHA:DES-CBC-SHA:DES-CBC-MD5:EXP-KRB5-RC2-CBC-MD5:EXP-KRB5-DES-CBC-MD5:EXP-KRB5-RC2-CBC-SHA:EXP-KRB5-DES-CBC-SHA:EXP-EDH-RSA-DES-CBC-SHA:EXP-EDH-DSS-DES-CBC-SHA:EXP-DES-CBC-SHA:EXP-RC2-CBC-MD5:EXP-RC2-CBC-MD5:EXP-KRB5-RC4-MD5:EXP-KRB5-RC4-SHA:EXP-RC4-MD5:EXP-RC4-MD5',
+                  //'verify_peer_name' => FALSE,
+                  //'allow_self_signed' => TRUE,
+                  //'local_cert' => '/etc/pki/tls/certs/ePermits-qa.crt',
+                  'cafile' => '/etc/pki/tls/certs/ePermits-qa.crt',
+                  'passphrase' => 'eP3rm-4Iam0n4',
+              ),
+          )
       );
-      return drupal_http_request($environment . '/tcscollections/services/TCSOnlineService/2.0', $msg_params);
+
+        $w = stream_get_wrappers();
+
+        $url = $environment . '/tcscollections/services/TCSOnlineService/2.0';
+
+        // use key 'http' even if you send the request to https://...
+        $options = array(
+            'https' => array(
+                $msg_params
+            )
+        );
+       // $context  = stream_context_create($options);
+      //start added content for TLS support
+        if (variable_get('canvas_api_request_method', 'drupal_http_request') == 'curl' && function_exists('curl_init')) {
+            $headers = array();
+            foreach ($options['headers'] as $property => $value) {
+                $headers[] = $property . ': ' . $value;
+            }
+            $curl = curl_init();
+            curl_setopt_array($curl, array(
+                CURLOPT_URL => $url . '?' . $options['data'],
+                CURLOPT_RETURNTRANSFER => TRUE,
+                CURLOPT_HEADER => TRUE,
+                CURLOPT_VERBOSE => TRUE,
+                CURLOPT_ENCODING => "",
+                CURLOPT_MAXREDIRS => 10,
+                CURLOPT_TIMEOUT => 30,
+                CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+                CURLOPT_CUSTOMREQUEST => $options['method'],
+                CURLOPT_HTTPHEADER => $headers,
+            ));
+            $return = curl_exec($curl);
+            $header_size = curl_getinfo($curl, CURLINFO_HEADER_SIZE);
+            $header = substr($return, 0, $header_size);
+            $rawheader = explode("\n", $header);
+            $body = substr($return, $header_size);
+            curl_close($curl);
+            $response = new stdClass();
+            $response->data = $body;
+            foreach ($rawheader as $header) {
+                if (strpos($header, 'Link: ') === 0) {
+                    $response->headers['link'] = str_replace('Link: ', '', $header);
+                }
+            }
+        }
+        // support for httprl which is faster then core and does same thing
+        elseif (module_exists('httprl')) {
+            httprl_request($url, $options);
+            // send the request off
+            $tmp = httprl_send_request();
+            $response = array_pop($tmp);
+        }
+        else {
+            // original fallback
+            $response = drupal_http_request($url, $options);
+        }
+
+        $socket = stream_socket_client('tlsv1.2://'$url); //added TLS
+
+        return $response; //end added for curl/tls
+
+
+       // return file_get_contents($url, false, $context);
+
+      //return drupal_http_request($environment . '/tcscollections/services/TCSOnlineService/2.0', $msg_params);
     case 'hosted collection complete':
       $msg_params = array(
         'headers' => array(
@@ -139,7 +216,15 @@ function pay_gov_invoke($options = array(), $method = NULL, $environment = NULL)
         ),
         'method' => 'POST',
         'data' => $message,
+        'context' => array(
+            'ssl' => array(
+                'verify_peer' => FALSE,
+                'verify_peer_name' => FALSE,
+            ),
+        )
       );
+
+
       return drupal_http_request($environment . '/tcscollections/services/TCSOnlineService/2.0', $msg_params);
   }
 }
@@ -317,6 +402,11 @@ function pay_gov_initialize_hosted_collection($amount, $application_id, $agency_
   );
 
   $response = pay_gov_invoke($options, 'hosted collection initialize', $environment);
+
+  if (!empty($response->error)){
+      drupal_set_message('There was an error with the pay.gov initialization. ' . $response->error, 'error');
+      return NULL;
+  }
   $response_data = _pay_gov_process_hosted_collection_initialize_response($response);
 
   if (empty($response_data)) {
