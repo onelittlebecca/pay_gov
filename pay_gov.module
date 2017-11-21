@@ -189,6 +189,10 @@ function pay_gov_invoke($options = array(), $method = NULL, $environment = NULL)
                 }
             }
         }
+<<<<<<< HEAD
+
+=======
+>>>>>>> cce77f2dd93cc5719e2a4b7a75ea714fa7152bfe
         // support for httprl which is faster then core and does same thing
         elseif (module_exists('httprl')) {
             httprl_request($url, $options);
